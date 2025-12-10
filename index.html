@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>西瓜遊戲 - 完整版</title>
+    <style>
+        :root {
+            --bg-color: #FFFAE0;
+            --panel-bg: #FFF;
+            --border-color: #8B4513;
+            --danger-color: rgba(255, 0, 0, 0.6);
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            user-select: none;
+        }
+
+        /* 主容器：垂直排列 (上方遊戲區，下方圖鑑區) */
+        #main-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            padding: 20px;
+        }
+
+        /* 遊戲區水平容器 (左側面板 + 右側畫布) */
+        #game-horizontal-wrapper {
+            position: relative;
+            display: flex;
+            gap: 20px;
+        }
+
+        /* 左側資訊欄 */
+        #ui-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel-box {
+            background: var(--panel-bg);
+            padding: 15px;
+            border-radius: 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 100px;
+        }
+
+        .panel-title { font-size: 14px; color: #888; margin-bottom: 5px; font-weight: bold; }
+        .panel-value { font-size: 24px; font-weight: bold; color: #333; }
+        #next-fruit-display { font-size: 40px; height: 50px; display: flex; align-items: center; justify-content: center; }
+
+        /* 遊戲畫布容器 */
+        #canvas-container {
+            position: relative; /* 為了放置 Overlay */
+            border-radius: 0 0 20px 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+            border: 4px solid var(--border-color);
+            border-top: none;
+            background: #FFF8E7;
+            cursor: crosshair;
+        }
+
+        /* Game Over 覆蓋層 */
+        #game-over-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: none; /* 預設隱藏 */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 10;
+        }
+        #game-over-overlay h2 { margin: 0 0 10px 0; font-size: 32px; color: #FF4444; }
+        #game-over-overlay .final-score { font-size: 24px; margin-bottom: 20px; }
+        #restart-btn {
+            padding: 10px 25px;
+            font-size: 18px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #restart-btn:hover { background: #45a049; }
+
+        /* 進化圖鑑區域 */
+        #evolution-legend {
+            background: rgba(255, 255, 255, 0.6);
+            padding: 10px 20px;
+            border-radius: 30px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 5px;
+            max-width: 600px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .legend-item { font-size: 24px; }
+        .legend-arrow { color: #999; font-size: 18px; margin: 0 2px; }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+
+<div id="main-container">
+    <div id="game-horizontal-wrapper">
+        <div id="ui-panel">
+            <div class="panel-box">
+                <div class="panel-title">分數 SCORE</div>
+                <div class="panel-value" id="score">0</div>
+            </div>
+            <div class="panel-box">
+                <div class="panel-title">下一個 NEXT</div>
+                <div id="next-fruit-display">🍒</div>
+            </div>
+            <div class="panel-box" style="background: #FFECEC;">
+                <div class="panel-title">最高分 BEST</div>
+                <div class="panel-value" id="best-score">0</div>
+            </div>
+        </div>
+
+        <div id="canvas-container">
+            <div id="game-over-overlay">
+                <h2>GAME OVER</h2>
+                <div class="final-score">Score: <span id="final-score-val">0</span></div>
+                <button id="restart-btn">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="evolution-legend">
+        </div>
+</div>
+
+<script>
+    // --- 設定與常數 ---
+    const GAME_WIDTH = 450;
+    const GAME_HEIGHT = 700;
+    // 危險線的 Y 座標 (如果修改這裡，記得也要修改 afterRender 裡的繪圖位置)
+    const DANGER_LINE_Y = 150; 
+    
+    const FRUITS = [
+        { label: 'cherry', radius: 18, emoji: '🍒', score: 2 },        // Lv 0
+        { label: 'strawberry', radius: 26, emoji: '🍓', score: 4 },    // Lv 1
+        { label: 'grape', radius: 34, emoji: '🍇', score: 8 },         // Lv 2
+        { label: 'orange', radius: 42, emoji: '🍊', score: 16 },       // Lv 3
+        { label: 'persimmon', radius: 52, emoji: '🟠', score: 32 },    // Lv 4
+        { label: 'apple', radius: 64, emoji: '🍎', score: 64 },        // Lv 5
+        { label: 'pear', radius: 76, emoji: '🍐', score: 128 },        // Lv 6
+        { label: 'peach', radius: 88, emoji: '🍑', score: 256 },       // Lv 7
+        { label: 'pineapple', radius: 100, emoji: '🍍', score: 512 },  // Lv 8
+        { label: 'melon', radius: 115, emoji: '🍈', score: 1024 },     // Lv 9
+        { label: 'watermelon', radius: 130, emoji: '🍉', score: 2048 } // Lv 10
+    ];
+
+    // --- 1. 生成進化圖鑑 (HTML) ---
+    const legendContainer = document.getElementById('evolution-legend');
+    let legendHTML = '';
+    FRUITS.forEach((fruit, index) => {
+        legendHTML += `<span class="legend-item" title="Level ${index}">${fruit.emoji}</span>`;
+        if (index < FRUITS.length - 1) {
+            legendHTML += `<span class="legend-arrow">→</span>`;
+        }
+    });
+    legendContainer.innerHTML = legendHTML;
+
+
+    // --- Matter.js 初始化 ---
+    const Engine = Matter.Engine,
+          Render = Matter.Render,
+          Runner = Matter.Runner,
+          Bodies = Matter.Bodies,
+          Composite = Matter.Composite,
+          Events = Matter.Events;
+
+    const engine = Engine.create();
+    const world = engine.world;
+
+    const render = Render.create({
+        element: document.getElementById('canvas-container'),
+        engine: engine,
+        options: {
+            width: GAME_WIDTH,
+            height: GAME_HEIGHT,
+            wireframes: false,
+            background: 'transparent'
+        }
+    });
+
+    // --- 建構場景 ---
+    const ground = Bodies.rectangle(GAME_WIDTH/2, GAME_HEIGHT + 30, GAME_WIDTH, 100, { isStatic: true });
+    const leftWall = Bodies.rectangle(-10, GAME_HEIGHT/2, 20, GAME_HEIGHT * 2, { isStatic: true });
+    const rightWall = Bodies.rectangle(GAME_WIDTH + 10, GAME_HEIGHT/2, 20, GAME_HEIGHT * 2, { isStatic: true });
+    Composite.add(world, [ground, leftWall, rightWall]);
+
+    // --- 遊戲狀態變數 ---
+    let gameState = 'playing'; // 'playing' 或 'gameover'
+    let currentScore = 0;
+    let bestScore = localStorage.getItem('suika-best') || 0;
+    document.getElementById('best-score').innerText = bestScore;
+
+    let currentFruitLevel = 0;
+    let nextFruitLevel = Math.floor(Math.random() * 2); // 開局只給前兩種
+    let isDropping = false;
+    let mouseX = GAME_WIDTH / 2;
+
+    // 輔助函數
+    function updateNextFruitDisplay() {
+        document.getElementById('next-fruit-display').innerText = FRUITS[nextFruitLevel].emoji;
+    }
+    updateNextFruitDisplay();
+
+    function updateScore(points) {
+        currentScore += points;
+        document.getElementById('score').innerText = currentScore;
+        if(currentScore > bestScore) {
+            bestScore = currentScore;
+            localStorage.setItem('suika-best', bestScore);
+            document.getElementById('best-score').innerText = bestScore;
+        }
+    }
+
+    function triggerGameOver() {
+        if (gameState === 'gameover') return;
+        gameState = 'gameover';
+        Runner.stop(runner); // 停止物理引擎
+        document.getElementById('final-score-val').innerText = currentScore;
+        document.getElementById('game-over-overlay').style.display = 'flex';
+    }
+
+    // 重置遊戲
+    document.getElementById('restart-btn').addEventListener('click', () => {
+        // 清空場景中的水果
+        const allBodies = Composite.allBodies(world);
+        allBodies.forEach(body => {
+            if (body.label === 'fruit') Composite.remove(world, body);
+        });
+        
+        // 重置變數
+        currentScore = 0;
+        document.getElementById('score').innerText = 0;
+        gameState = 'playing';
+        isDropping = false;
+        currentFruitLevel = 0;
+        nextFruitLevel = Math.floor(Math.random() * 3);
+        updateNextFruitDisplay();
+        document.getElementById('game-over-overlay').style.display = 'none';
+        Runner.run(runner, engine); // 重啟引擎
+    });
+
+    // --- 核心邏輯：Game Over 檢查 ---
+    // 在每次物理更新後檢查
+    Events.on(engine, 'afterUpdate', function() {
+        if (gameState !== 'playing') return;
+
+        const bodies = Composite.allBodies(world);
+        for (let i = 0; i < bodies.length; i++) {
+            const body = bodies[i];
+            if (body.label === 'fruit' && !body.isRemoved) {
+                // 計算水果的「最高點」Y座標
+                const topY = body.position.y - body.circleRadius;
+                
+                // 判定條件：
+                // 1. 水果頂部高於危險線 (Y 值越小越高)
+                // 2. 水果幾乎靜止 (speed < 0.2) - 避免剛掉下來經過線時誤判
+                // 3. 確保不是剛生成在畫面外的 (topY > 0)
+                if (topY < DANGER_LINE_Y && body.speed < 0.2 && topY > 0) {
+                    // 為了增加容錯率，真正的遊戲通常會計算「停留時間」
+                    // 這裡簡化處理：只要偵測到靜止且超線，就結束
+                    console.log("Game Over triggered by fruit ID:", body.id);
+                    triggerGameOver();
+                    break; // 只要有一個超線就結束
+                }
+            }
+        }
+    });
+
+    // --- 渲染循環 (畫 Emoji 和輔助線) ---
+    Events.on(render, 'afterRender', function() {
+        const context = render.context;
+        
+        // 1. 畫出危險線 (要在水果下面，所以先畫或是用 globalCompositeOperation)
+        context.save();
+        context.beginPath();
+        context.moveTo(0, DANGER_LINE_Y);
+        context.lineTo(GAME_WIDTH, DANGER_LINE_Y);
+        context.strokeStyle = "rgba(255, 50, 50, 0.6)";
+        context.lineWidth = 3;
+        context.setLineDash([10, 5]); // 虛線
+        context.stroke();
+        context.restore();
+
+        // 2. 畫出所有水果 Emoji
+        const bodies = Composite.allBodies(world);
+        context.font = "30px Arial";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+
+        bodies.forEach(body => {
+            if (body.label === 'fruit' && !body.isRemoved) {
+                const fruit = FRUITS[body.customLevel];
+                context.save();
+                context.translate(body.position.x, body.position.y);
+                context.rotate(body.angle);
+                // 畫圓形背景
+                context.beginPath();
+                context.arc(0, 0, fruit.radius, 0, 2 * Math.PI);
+                context.fillStyle = "#FFF0D0";
+                context.fill();
+                // 畫 Emoji
+                context.font = `${fruit.radius * 1.55}px sans-serif`;
+                context.fillText(fruit.emoji, 0, fruit.radius * 0.1); 
+                context.restore();
+            }
+        });
+
+        // 3. 畫出準備掉落的水果與瞄準線
+        if (!isDropping && gameState === 'playing') {
+            const fruit = FRUITS[currentFruitLevel];
+            // 瞄準線
+            context.beginPath();
+            context.moveTo(mouseX, 50);
+            context.lineTo(mouseX, GAME_HEIGHT);
+            context.strokeStyle = "rgba(0,0,0,0.2)";
+            context.setLineDash([5, 5]);
+            context.stroke();
+            context.setLineDash([]);
+            // 手中的水果
+            context.save();
+            context.translate(mouseX, 50);
+            context.font = `${fruit.radius * 1.55}px sans-serif`;
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillText(fruit.emoji, 0, fruit.radius * 0.1);
+            context.restore();
+        }
+    });
+
+    // --- 操控 ---
+    render.canvas.addEventListener('mousemove', (e) => {
+        if (gameState !== 'playing') return;
+        const rect = render.canvas.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        const radius = FRUITS[currentFruitLevel].radius;
+        // 限制在牆壁內
+        x = Math.max(radius + 5, Math.min(GAME_WIDTH - radius - 5, x));
+        mouseX = x;
+    });
+
+    render.canvas.addEventListener('mousedown', (e) => {
+        if (isDropping || gameState !== 'playing') return;
+        isDropping = true;
+        const level = currentFruitLevel;
+        const radius = FRUITS[level].radius;
+        
+        // 稍微提高生成點，讓它有落下的感覺
+        const spawnY = 30; 
+        const body = Bodies.circle(mouseX, spawnY, radius, {
+            label: 'fruit',
+            restitution: 0.2, density: 0.001, friction: 0.1,
+            customLevel: level
+        });
+        Composite.add(world, body);
+
+        setTimeout(() => {
+            currentFruitLevel = nextFruitLevel;
+            // 隨機生成 Level 0~3
+            nextFruitLevel = Math.floor(Math.random() * 4); 
+            updateNextFruitDisplay();
+            isDropping = false;
+        }, 800); // 冷卻時間
+    });
+
+    // --- 合成 ---
+    Events.on(engine, 'collisionStart', (event) => {
+        if (gameState !== 'playing') return;
+        event.pairs.forEach((collision) => {
+            const bodyA = collision.bodyA;
+            const bodyB = collision.bodyB;
+            if (bodyA.label === 'fruit' && bodyB.label === 'fruit') {
+                if (bodyA.customLevel === bodyB.customLevel && !bodyA.isRemoved && !bodyB.isRemoved) {
+                    bodyA.isRemoved = true; bodyB.isRemoved = true;
+                    const newLevel = bodyA.customLevel + 1;
+                    updateScore(FRUITS[bodyA.customLevel].score);
+                    
+                    if (newLevel < FRUITS.length) {
+                        const newX = (bodyA.position.x + bodyB.position.x) / 2;
+                        const newY = (bodyA.position.y + bodyB.position.y) / 2;
+                        const newBody = Bodies.circle(newX, newY, FRUITS[newLevel].radius, {
+                            label: 'fruit', restitution: 0.2, customLevel: newLevel
+                        });
+                        Composite.remove(world, [bodyA, bodyB]);
+                        Composite.add(world, newBody);
+                    } else {
+                        // 合成到最大(西瓜)，直接移除並加很多分
+                         updateScore(FRUITS[newLevel-1].score * 2);
+                         Composite.remove(world, [bodyA, bodyB]);
+                    }
+                }
+            }
+        });
+    });
+
+    // 啟動
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+    Render.run(render);
+
+</script>
+</body>
+</html>
